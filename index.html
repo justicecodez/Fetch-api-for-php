@@ -1,0 +1,231 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Tasks table</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; padding: 16px; }
+    input[type="text"] { width: 300px; padding: 6px; margin-bottom: 10px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #f4f4f4; }
+    .color-swatch { display:inline-block; width:24px; height:18px; border:1px solid #ccc; vertical-align:middle; margin-right:8px; }
+    #refreshInfo { font-size: 0.9rem; color: #555; margin-left: 12px; }
+    /* Modal */
+    .modal { display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; overflow:auto; background: rgba(0,0,0,0.5); }
+    .modal-content { background:#fff; margin:5% auto; padding:20px; width:90%; max-width:500px; border-radius:8px; }
+    .close-btn { float:right; cursor:pointer; font-size:18px; }
+    img.preview { max-width:100%; height:auto; display:block; margin-top:12px; }
+    .loading { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Tasks</h1>
+
+  <div>
+    <input id="search" type="text" placeholder="Search tasks (any column)..." />
+    <button id="openModalBtn">Open Image Modal</button>
+    <span id="refreshInfo"></span>
+  </div>
+
+  <div id="status" class="loading">Loading...</div>
+
+  <table id="tasksTable" aria-live="polite">
+    <thead>
+      <tr>
+        <th>Task</th>
+        <th>Title</th>
+        <th>Description</th>
+        <th>Color</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <!-- Modal -->
+  <div id="myModal" class="modal" aria-hidden="true">
+    <div class="modal-content">
+      <span class="close-btn" id="closeModal">&times;</span>
+      <h3>Select an image</h3>
+      <input id="imageInput" type="file" accept="image/*" />
+      <img id="imagePreview" class="preview" src="" alt="Selected preview" />
+    </div>
+  </div>
+
+  <script>
+    // Helper sanitize color (allow #RRGGBB or #RGB or color names)
+    function sanitizeColor(c) {
+      if (!c) return '';
+      c = String(c).trim();
+      // allow hex with/without #
+      const hex = c.replace(/^#/, '');
+      if (/^[0-9A-Fa-f]{6}$/.test(hex)) return '#' + hex;
+      if (/^[0-9A-Fa-f]{3}$/.test(hex)) return '#' + hex;
+      // allow simple CSS color names (let the browser validate)
+      if (/^[a-zA-Z]+$/.test(c)) return c;
+      return ''; // unknown -> no color
+    }
+
+    const status = document.getElementById('status');
+    const tbody = document.querySelector('#tasksTable tbody');
+    const searchInput = document.getElementById('search');
+    const refreshInfo = document.getElementById('refreshInfo');
+
+    let currentData = [];
+    let items = [];
+
+    async function loadData() {
+      status.textContent = 'Fetching data...';
+      try {
+        fetch('fetch_tasks.php').then((response)=>{
+          return response.json();
+        }).then((data)=>{
+          items=data.data;
+        })
+        // const res = await fetch('fetch_tasks.php', { cache: 'no-store' });
+        // if (!res.ok) throw new Error('Network response was not ok: ' + res.status);
+        // const data = await res.json();
+        // // Normalize: the API may return an array or wrap it; try to find array
+        // let items = [];
+        // if (Array.isArray(data)) items = data;
+        // else if (Array.isArray(data.data)) items = data.data;
+        // else if (Array.isArray(data.result)) items = data.result;
+        // else if (Array.isArray(data.records)) items = data.records;
+        // else {
+        //   // fallback: try searching through object for arrays
+        //   for (const k in data) {
+        //     if (Array.isArray(data[k])) { items = data[k]; break; }
+        //   }
+        // }
+        currentData = items || [];
+        renderTable(currentData);
+        status.textContent = '';
+        const now = new Date();
+        refreshInfo.textContent = 'Last refresh: ' + now.toLocaleString();
+      } catch (err) {
+        status.textContent = 'Error fetching data: ' + err.message;
+        console.error(err);
+      }
+    }
+
+    function renderTable(items) {
+      tbody.innerHTML = '';
+      if (!items || items.length === 0) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="4">No data</td>';
+        tbody.appendChild(tr);
+        return;
+      }
+
+      items.forEach(item => {
+        // fields requested: task, title, description, colorCode
+        const tr = document.createElement('tr');
+        const task = item.task ?? item.id ?? '';
+        const title = item.title ?? item.name ?? '';
+        const description = item.description ?? item.desc ?? '';
+        const colorCode = item.colorCode ?? item.color ?? '';
+
+        const sanitized = sanitizeColor(colorCode);
+        const colorSwatch = document.createElement('span');
+        colorSwatch.className = 'color-swatch';
+        if (sanitized) colorSwatch.style.backgroundColor = sanitized;
+
+        tr.innerHTML = `
+          <td class="col-task">${escapeHtml(task)}</td>
+          <td class="col-title">${escapeHtml(title)}</td>
+          <td class="col-desc">${escapeHtml(description)}</td>
+          <td class="col-color"></td>
+        `;
+        tr.querySelector('.col-color').appendChild(colorSwatch);
+        // also add the color code text
+        const textSpan = document.createElement('span');
+        textSpan.textContent = ' ' + (colorCode || '');
+        tr.querySelector('.col-color').appendChild(textSpan);
+
+        tbody.appendChild(tr);
+      });
+      applyFilter(); // in case user has typed search text
+    }
+
+    // Basic HTML escape
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    // Search/filter: show rows that match search across all columns
+    function applyFilter() {
+      const q = searchInput.value.trim().toLowerCase();
+      const rows = tbody.querySelectorAll('tr');
+      if (!q) {
+        rows.forEach(r => (r.style.display = 'table-row'));
+        return;
+      }
+      rows.forEach(r => {
+        const text = r.textContent.toLowerCase();
+        r.style.display = text.indexOf(q) !== -1 ? 'table-row' : 'none';
+      });
+    }
+
+    // Debounce helper
+    function debounce(fn, wait = 250) {
+      let t;
+      return function(...args) {
+        clearTimeout(t);
+        t = setTimeout(() => fn.apply(this, args), wait);
+      };
+    }
+
+    searchInput.addEventListener('input', debounce(applyFilter, 200));
+
+    // Auto-refresh every 60 minutes (60 * 60 * 1000 ms = 3,600,000 ms)
+    const REFRESH_MS = 60 * 60 * 1000;
+    window.addEventListener('load', () => {
+      loadData();
+      setInterval(loadData, REFRESH_MS);
+    });
+
+    // Modal & image preview
+    const modal = document.getElementById('myModal');
+    const openModalBtn = document.getElementById('openModalBtn');
+    const closeModal = document.getElementById('closeModal');
+    const imageInput = document.getElementById('imageInput');
+    const imagePreview = document.getElementById('imagePreview');
+
+    openModalBtn.addEventListener('click', () => {
+      modal.style.display = 'block';
+      modal.setAttribute('aria-hidden', 'false');
+    });
+    closeModal.addEventListener('click', () => {
+      modal.style.display = 'none';
+      modal.setAttribute('aria-hidden', 'true');
+      imageInput.value = '';
+      imagePreview.src = '';
+    });
+    window.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        closeModal.click();
+      }
+    });
+
+    imageInput.addEventListener('change', (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) {
+        imagePreview.src = '';
+        return;
+      }
+      // show preview
+      const url = URL.createObjectURL(file);
+      imagePreview.src = url;
+      // release URL when image loads
+      imagePreview.onload = () => URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
